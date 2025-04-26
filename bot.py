@@ -3,7 +3,6 @@ import time
 import logging
 import requests
 from threading import Thread
-from flask import Flask, request
 
 import telebot
 from yt_dlp import YoutubeDL
@@ -15,12 +14,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Bot Token and App URL
+# Bot Token
 BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_DEFAULT_BOT_TOKEN")
-APP_URL = os.getenv("APP_URL", "https://your-koyeb-app-name.koyeb.app")  # Set your Koyeb App URL here
-
 bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__)
 
 # Global Variables
 download_count = 0
@@ -28,16 +24,17 @@ bot_start_time = time.time()
 
 # Utils
 def sanitize_filename(filename):
+    """Remove illegal characters from filenames"""
     illegal_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
     for char in illegal_chars:
         filename = filename.replace(char, '_')
     return filename
 
 def keep_alive():
-    """Optional Keep Alive Pings (not needed on Koyeb usually)"""
+    """Prevent bot sleeping (for free hosting platforms)"""
     while True:
         logger.info("Keep-alive ping")
-        time.sleep(600)
+        time.sleep(600)  # every 10 minutes
 
 # Handlers
 @bot.message_handler(commands=['start'])
@@ -46,8 +43,8 @@ def handle_start(message):
     welcome_image = "https://envs.sh/C_W.jpg"
     caption = (
         f"✨🎶 *Welcome, {name}!* 🎶✨\n\n"
-        "I am your *Music Bot*! Send me the name of a song or artist.\n\n"
-        "💬 *Examples:*\n"
+        "I am your *Music Bot* here to bring you any song you want! Just send me the name of a song or artist, and I'll find it for you.\n\n"
+        "💬 *Examples to try:*\n"
         "`Shape of You - Ed Sheeran`\n"
         "`Senorita - Shawn Mendes`\n\n"
         "📜 *Commands:*\n"
@@ -120,9 +117,11 @@ def handle_music_request(message):
     status = bot.reply_to(message, f"🔎 Searching for: *{query}*", parse_mode="Markdown")
 
     try:
+        # Create download directory
         os.makedirs("downloads", exist_ok=True)
         file_base = f"downloads/{int(time.time())}"
 
+        # Precheck YouTube Search
         with YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
             result = ydl.extract_info(f"ytsearch1:{query}", download=False)
         if not result or not result.get('entries'):
@@ -135,6 +134,7 @@ def handle_music_request(message):
         bot.edit_message_text("🎶 Found! Downloading audio...", chat_id, status.message_id, parse_mode="Markdown")
         bot.send_chat_action(chat_id, 'upload_audio')
 
+        # Download Options
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': f"{file_base}.%(ext)s",
@@ -157,7 +157,7 @@ def handle_music_request(message):
         thumb_url = info.get('thumbnail')
 
         mp3_file = f"{file_base}.mp3"
-        if os.path.getsize(mp3_file) > 50 * 1024 * 1024:
+        if os.path.getsize(mp3_file) > 50 * 1024 * 1024:  # >50MB
             bot.edit_message_text(
                 "⚠️ Audio file too large (>50MB). Try a shorter song.",
                 chat_id, status.message_id
@@ -165,15 +165,18 @@ def handle_music_request(message):
             os.remove(mp3_file)
             return
 
+        # Download thumbnail
         thumb_file = None
         if thumb_url:
             thumb_file = f"{file_base}_thumb.jpg"
             with open(thumb_file, 'wb') as f:
                 f.write(requests.get(thumb_url).content)
 
+        # Format Duration
         min, sec = divmod(duration, 60)
         duration_str = f"{int(min)}:{sec:02d}"
 
+        # Upload
         with open(mp3_file, 'rb') as audio:
             thumb_param = {}
             if thumb_file and os.path.exists(thumb_file):
@@ -217,6 +220,7 @@ def handle_music_request(message):
         bot.delete_message(chat_id, status.message_id)
         download_count += 1
 
+        # Cleanup
         os.remove(mp3_file)
         if thumb_file and os.path.exists(thumb_file):
             os.remove(thumb_file)
@@ -229,29 +233,11 @@ def handle_music_request(message):
             parse_mode="Markdown"
         )
 
-# Webhook Routes
-@app.route('/', methods=['GET', 'HEAD'])
-def index():
-    return "Bot is running!"
-
-@app.route(f"/{BOT_TOKEN}", methods=['POST'])
-def webhook():
-    json_string = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return 'ok', 200
-
 # Main
 def main():
     Thread(target=keep_alive, daemon=True).start()
-
-    webhook_url = f"{APP_URL}/{BOT_TOKEN}"
-    bot.remove_webhook()
-    time.sleep(1)
-    bot.set_webhook(url=webhook_url)
-    logger.info(f"Webhook set to {webhook_url}")
-
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    logger.info("Bot started polling...")
+    bot.infinity_polling(timeout=60, long_polling_timeout=60)
 
 if __name__ == "__main__":
     main()
