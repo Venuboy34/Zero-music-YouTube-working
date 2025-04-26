@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "7607542715:AAEFjEb3RQ38ztOE4DkqMxGQQL5uCN4WZPw")
 bot = telebot.TeleBot(BOT_TOKEN)
 
+def sanitize_filename(filename):
+    """Remove illegal characters from filenames"""
+    illegal_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+    for char in illegal_chars:
+        filename = filename.replace(char, '_')
+    return filename
+
 # Statistics tracking
 download_count = 0
 
@@ -34,9 +41,37 @@ def welcome(message):
     bot.send_photo(
         message.chat.id,
         welcome_image_url,
-        caption=f"🎧 Hello {name}!\n\nSend me a *music name* and I'll find it on YouTube, extract the audio, and send it back to you as MP3!\n\n🔍 Just type something like:\n`Believer by Imagine Dragons`\n\n/help - Show more commands",
+        caption=f"🎧 Hello {name}!\n\nSend me a *music name* and I'll find it on YouTube, extract the audio, and send it back to you as MP3!\n\n🔍 Just type something like:\n`Believer by Imagine Dragons`\n\n/help - Show more commands\n/test - Check YouTube connectivity",
         parse_mode="Markdown"
     )
+    
+@bot.message_handler(commands=['test'])
+def test_connection(message):
+    """Test bot connectivity to YouTube"""
+    try:
+        # Test connection to YouTube
+        test_query = "test song"
+        with YoutubeDL({'quiet': True, 'extract_flat': True, 'skip_download': True}) as ydl:
+            search_results = ydl.extract_info(f"ytsearch1:{test_query}", download=False)
+            
+            if search_results and len(search_results.get('entries', [])) > 0:
+                bot.send_message(
+                    message.chat.id,
+                    "✅ Bot is working correctly and can connect to YouTube.",
+                    parse_mode="Markdown"
+                )
+            else:
+                bot.send_message(
+                    message.chat.id,
+                    "⚠️ Bot can connect to YouTube but search results are empty.",
+                    parse_mode="Markdown"
+                )
+    except Exception as e:
+        bot.send_message(
+            message.chat.id,
+            f"❌ Connection test failed: {str(e)}",
+            parse_mode="Markdown"
+        )
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
@@ -45,7 +80,8 @@ def help_command(message):
         "• Simply type a song name or artist to search\n"
         "• /start - Welcome message\n"
         "• /help - Show this help message\n"
-        "• /stats - Show bot statistics\n\n"
+        "• /stats - Show bot statistics\n"
+        "• /test - Check YouTube connectivity\n\n"
         "*Examples:*\n"
         "`Bohemian Rhapsody`\n"
         "`Dua Lipa New Rules`\n"
@@ -97,6 +133,18 @@ def music_search(message):
     }
 
     try:
+        # First check if search returns results
+        with YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
+            search_results = ydl.extract_info(f"ytsearch1:{search_query}", download=False)
+            
+            if not search_results or len(search_results.get('entries', [])) == 0:
+                bot.edit_message_text(
+                    "⚠️ No results found. Please try a different search query.",
+                    message.chat.id,
+                    status_message.message_id
+                )
+                return
+        
         # Update status message
         bot.edit_message_text(
             f"🔎 Found! Downloading audio...", 
@@ -108,16 +156,10 @@ def music_search(message):
         # Send "upload_audio" action
         bot.send_chat_action(message.chat.id, 'upload_audio')
         
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{search_query}", download=True)['entries'][0]
-            title = info.get('title', 'Unknown Title')
-            artist = info.get('uploader', 'Unknown Artist')
-            thumbnail_url = info.get('thumbnail', None)
-            duration = info.get('duration', 0)
-            view_count = info.get('view_count', 'Unknown')
-            webpage_url = info.get('webpage_url', '')
+        with YoutubeDL(ydl_
             
-            # Check file size
+            # Use sanitized filename
+            title_safe = sanitize_filename(title)
             filename = f"{file_path}.mp3"
             
             # If file is too large for Telegram (>50MB)
@@ -139,12 +181,16 @@ def music_search(message):
             with open(thumb_file, 'wb') as f:
                 f.write(r.content)
 
-        # Update status message
+        # Update status message with more detailed info
         bot.edit_message_text(
-            f"📤 Uploading to Telegram...", 
+            f"🎵 *{title}*\n👤 By: _{artist}_\n\n📤 Converting and uploading to Telegram...\nPlease wait, this may take a few moments.", 
             message.chat.id, 
-            status_message.message_id
+            status_message.message_id,
+            parse_mode="Markdown"
         )
+        
+        # Add a small delay to ensure user sees the status
+        time.sleep(1)
 
         # Format duration
         minutes, seconds = divmod(duration, 60)
