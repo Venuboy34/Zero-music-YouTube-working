@@ -1,22 +1,28 @@
+import os
+import time
+import logging
+import requests
+from threading import Thread
+
 import telebot
 from yt_dlp import YoutubeDL
-import os
-import requests
-import logging
-import time
-from threading import Thread
 
 # Configure logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Get bot token from environment variable
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "7607542715:AAEFjEb3RQ38ztOE4DkqMxGQQL5uCN4WZPw")
+# Bot Token
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_DEFAULT_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Global Variables
+download_count = 0
+bot_start_time = time.time()
+
+# Utils
 def sanitize_filename(filename):
     """Remove illegal characters from filenames"""
     illegal_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
@@ -24,241 +30,206 @@ def sanitize_filename(filename):
         filename = filename.replace(char, '_')
     return filename
 
-# Statistics tracking
-download_count = 0
-
-# Keep-alive function for preventing service from sleeping
 def keep_alive():
+    """Prevent bot sleeping (for free hosting platforms)"""
     while True:
         logger.info("Keep-alive ping")
-        time.sleep(600)  # Ping every 10 minutes
+        time.sleep(600)  # every 10 minutes
 
+# Handlers
 @bot.message_handler(commands=['start'])
-def welcome(message):
+def handle_start(message):
     name = message.from_user.first_name
-    welcome_image_url = "https://envs.sh/C_W.jpg"
-    
+    welcome_image = "https://envs.sh/C_W.jpg"
+    caption = (
+        f"🎧 Hello {name}!\n\n"
+        "Send me any *music name*, and I'll search it on YouTube, extract audio, and send it back as MP3!\n\n"
+        "🔍 Try typing:\n"
+        "`Shape of You by Ed Sheeran`\n\n"
+        "/help - See commands\n"
+        "/test - Test YouTube connection"
+    )
     bot.send_photo(
         message.chat.id,
-        welcome_image_url,
-        caption=f"🎧 Hello {name}!\n\nSend me a *music name* and I'll find it on YouTube, extract the audio, and send it back to you as MP3!\n\n🔍 Just type something like:\n`Believer by Imagine Dragons`\n\n/help - Show more commands\n/test - Check YouTube connectivity",
+        welcome_image,
+        caption=caption,
         parse_mode="Markdown"
     )
-    
-@bot.message_handler(commands=['test'])
-def test_connection(message):
-    """Test bot connectivity to YouTube"""
-    try:
-        # Test connection to YouTube
-        test_query = "test song"
-        with YoutubeDL({'quiet': True, 'extract_flat': True, 'skip_download': True}) as ydl:
-            search_results = ydl.extract_info(f"ytsearch1:{test_query}", download=False)
-            
-            if search_results and len(search_results.get('entries', [])) > 0:
-                bot.send_message(
-                    message.chat.id,
-                    "✅ Bot is working correctly and can connect to YouTube.",
-                    parse_mode="Markdown"
-                )
-            else:
-                bot.send_message(
-                    message.chat.id,
-                    "⚠️ Bot can connect to YouTube but search results are empty.",
-                    parse_mode="Markdown"
-                )
-    except Exception as e:
-        bot.send_message(
-            message.chat.id,
-            f"❌ Connection test failed: {str(e)}",
-            parse_mode="Markdown"
-        )
 
 @bot.message_handler(commands=['help'])
-def help_command(message):
+def handle_help(message):
     help_text = (
-        "*Commands and Usage:*\n\n"
-        "• Simply type a song name or artist to search\n"
-        "• /start - Welcome message\n"
-        "• /help - Show this help message\n"
-        "• /stats - Show bot statistics\n"
-        "• /test - Check YouTube connectivity\n\n"
+        "*Available Commands:*\n\n"
+        "• Type song or artist name to search\n"
+        "• /start - Welcome Message\n"
+        "• /help - Help Commands\n"
+        "• /stats - Bot Statistics\n"
+        "• /test - Check YouTube Connection\n\n"
         "*Examples:*\n"
-        "`Bohemian Rhapsody`\n"
-        "`Dua Lipa New Rules`\n"
-        "`Blinding Lights The Weeknd`"
+        "`Imagine Dragons Believer`\n"
+        "`Senorita Shawn Mendes`"
     )
     bot.send_message(message.chat.id, help_text, parse_mode="Markdown")
 
+@bot.message_handler(commands=['test'])
+def handle_test(message):
+    try:
+        with YoutubeDL({'quiet': True, 'extract_flat': True, 'skip_download': True}) as ydl:
+            search = ydl.extract_info("ytsearch1:test", download=False)
+        if search and search.get('entries'):
+            bot.send_message(message.chat.id, "✅ YouTube connection successful!", parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, "⚠️ YouTube connected but no results!", parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Test error: {e}")
+        bot.send_message(message.chat.id, f"❌ YouTube connection failed.\n\nError: `{e}`", parse_mode="Markdown")
+
 @bot.message_handler(commands=['stats'])
-def stats(message):
-    uptime = time.time() - bot_start_time
-    days, remainder = divmod(uptime, 86400)
+def handle_stats(message):
+    uptime_seconds = time.time() - bot_start_time
+    days, remainder = divmod(uptime_seconds, 86400)
     hours, remainder = divmod(remainder, 3600)
     minutes, seconds = divmod(remainder, 60)
-    
-    stats_text = (
-        "📊 *Bot Statistics*\n\n"
+
+    stats = (
+        "📊 *Bot Stats:*\n\n"
         f"🎵 Downloads: *{download_count}*\n"
         f"⏱ Uptime: *{int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s*\n"
-        f"👥 Created by: @zerocreations"
+        f"👤 Created by: @zerocreations"
     )
-    bot.send_message(message.chat.id, stats_text, parse_mode="Markdown")
+    bot.send_message(message.chat.id, stats, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda msg: True)
-def music_search(message):
+@bot.message_handler(func=lambda m: True)
+def handle_music_request(message):
     global download_count
-    search_query = message.text
-    name = message.from_user.first_name
-    
-    # Send "typing..." action
-    bot.send_chat_action(message.chat.id, 'typing')
-    
-    # Send search message
-    status_message = bot.reply_to(message, f"🔎 Searching for: *{search_query}*...", parse_mode="Markdown")
 
-    # Directory for downloads
-    os.makedirs("downloads", exist_ok=True)
-    file_path = f"downloads/{int(time.time())}"
-    
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'noplaylist': True,
-        'outtmpl': f'{file_path}.%(ext)s',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'quiet': True,
-    }
+    query = message.text.strip()
+    user_name = message.from_user.first_name
+    chat_id = message.chat.id
+
+    bot.send_chat_action(chat_id, 'typing')
+    status = bot.reply_to(message, f"🔎 Searching for: *{query}*", parse_mode="Markdown")
 
     try:
-        # First check if search returns results
+        # Create download directory
+        os.makedirs("downloads", exist_ok=True)
+        file_base = f"downloads/{int(time.time())}"
+
+        # Precheck YouTube Search
         with YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
-            search_results = ydl.extract_info(f"ytsearch1:{search_query}", download=False)
-            
-            if not search_results or len(search_results.get('entries', [])) == 0:
-                bot.edit_message_text(
-                    "⚠️ No results found. Please try a different search query.",
-                    message.chat.id,
-                    status_message.message_id
-                )
-                return
-        
-        # Update status message
-        bot.edit_message_text(
-            f"🔎 Found! Downloading audio...", 
-            message.chat.id, 
-            status_message.message_id,
-            parse_mode="Markdown"
-        )
-        
-        # Send "upload_audio" action
-        bot.send_chat_action(message.chat.id, 'upload_audio')
-        
+            result = ydl.extract_info(f"ytsearch1:{query}", download=False)
+        if not result or not result.get('entries'):
+            bot.edit_message_text(
+                "⚠️ No results found. Try another search.",
+                chat_id, status.message_id
+            )
+            return
+
+        bot.edit_message_text("🎶 Found! Downloading audio...", chat_id, status.message_id, parse_mode="Markdown")
+        bot.send_chat_action(chat_id, 'upload_audio')
+
+        # Download Options
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': f"{file_base}.%(ext)s",
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': True,
+        }
+
         with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{search_query}", download=True)
-            entry = info['entries'][0]
-            title = entry.get('title')
-            artist = entry.get('uploader')
-            duration = entry.get('duration', 0)
-            webpage_url = entry.get('webpage_url')
-            view_count = entry.get('view_count', 0)
-            thumbnail_url = entry.get('thumbnail')
+            info = ydl.extract_info(f"ytsearch1:{query}", download=True)['entries'][0]
 
-            # Use sanitized filename
-            title_safe = sanitize_filename(title)
-            filename = f"{file_path}.mp3"
-            
-            # If file is too large for Telegram (>50MB)
-            file_size = os.path.getsize(filename) / (1024 * 1024)  # Size in MB
-            if file_size > 50:
-                bot.edit_message_text(
-                    f"⚠️ The audio file is too large ({file_size:.1f}MB). Telegram allows max 50MB.\n\nTry a shorter song.",
-                    message.chat.id,
-                    status_message.message_id
-                )
-                os.remove(filename)
-                return
+        title = sanitize_filename(info.get('title', 'Unknown'))
+        artist = info.get('uploader', 'Unknown')
+        duration = info.get('duration', 0)
+        url = info.get('webpage_url')
+        views = info.get('view_count', 0)
+        thumb_url = info.get('thumbnail')
 
-        # Handle thumbnail download only if available
+        mp3_file = f"{file_base}.mp3"
+        if os.path.getsize(mp3_file) > 50 * 1024 * 1024:  # >50MB
+            bot.edit_message_text(
+                "⚠️ Audio file too large (>50MB). Try a shorter song.",
+                chat_id, status.message_id
+            )
+            os.remove(mp3_file)
+            return
+
+        # Download thumbnail
         thumb_file = None
-        if thumbnail_url:
-            thumb_file = f"{file_path}_thumb.jpg"
-            r = requests.get(thumbnail_url)
+        if thumb_url:
+            thumb_file = f"{file_base}_thumb.jpg"
             with open(thumb_file, 'wb') as f:
-                f.write(r.content)
+                f.write(requests.get(thumb_url).content)
 
-        # Update status message with more detailed info
-        bot.edit_message_text(
-            f"🎵 *{title}*\n👤 By: _{artist}_\n\n📤 Converting and uploading to Telegram...\nPlease wait, this may take a few moments.", 
-            message.chat.id, 
-            status_message.message_id,
-            parse_mode="Markdown"
-        )
-        
-        # Add a small delay to ensure user sees the status
-        time.sleep(1)
+        # Format Duration
+        min, sec = divmod(duration, 60)
+        duration_str = f"{int(min)}:{sec:02d}"
 
-        # Format duration
-        minutes, seconds = divmod(duration, 60)
-        duration_str = f"{int(minutes)}:{int(seconds):02d}"
-
-        # Send the audio with or without thumbnail
-        with open(filename, 'rb') as audio:
+        # Upload
+        with open(mp3_file, 'rb') as audio:
+            thumb_param = {}
             if thumb_file and os.path.exists(thumb_file):
                 with open(thumb_file, 'rb') as thumb:
+                    thumb_param['thumb'] = thumb
                     bot.send_audio(
-                        message.chat.id, 
-                        audio, 
-                        title=title, 
+                        chat_id,
+                        audio,
+                        title=title,
                         performer=artist,
-                        thumb=thumb,
-                        caption=f"🎵 *{title}*\n👤 By: _{artist}_\n⏱ Duration: {duration_str}\n👁 Views: {view_count:,}\n\n[YouTube Link]({webpage_url})\n\nEnjoy, {name}! 🎧\n\nPowered by @zerocreations",
-                        parse_mode="Markdown"
+                        caption=(
+                            f"🎵 *{title}*\n"
+                            f"👤 _{artist}_\n"
+                            f"⏱ {duration_str}\n"
+                            f"👁 {views:,} views\n\n"
+                            f"[YouTube Link]({url})\n\n"
+                            f"Enjoy, {user_name}! 🎧\n\n"
+                            f"Powered by @zerocreations"
+                        ),
+                        parse_mode="Markdown",
+                        **thumb_param
                     )
-                os.remove(thumb_file)
             else:
                 bot.send_audio(
-                    message.chat.id, 
-                    audio, 
-                    title=title, 
+                    chat_id,
+                    audio,
+                    title=title,
                     performer=artist,
-                    caption=f"🎵 *{title}*\n👤 By: _{artist}_\n⏱ Duration: {duration_str}\n👁 Views: {view_count:,}\n\n[YouTube Link]({webpage_url})\n\nEnjoy, {name}! 🎧\n\nPowered by @zerocreations",
+                    caption=(
+                        f"🎵 *{title}*\n"
+                        f"👤 _{artist}_\n"
+                        f"⏱ {duration_str}\n"
+                        f"👁 {views:,} views\n\n"
+                        f"[YouTube Link]({url})\n\n"
+                        f"Enjoy, {user_name}! 🎧\n\n"
+                        f"Powered by @zerocreations"
+                    ),
                     parse_mode="Markdown"
                 )
 
-        # Delete the status message after successful send
-        bot.delete_message(message.chat.id, status_message.message_id)
-        
-        # Increment download counter
+        bot.delete_message(chat_id, status.message_id)
         download_count += 1
-        
-        # Clean up
-        os.remove(filename)
+
+        # Cleanup
+        os.remove(mp3_file)
+        if thumb_file and os.path.exists(thumb_file):
+            os.remove(thumb_file)
 
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Music Search Error: {e}")
         bot.edit_message_text(
-            "⚠️ Error: Couldn't find or download the music. Please try another search query.",
-            message.chat.id,
-            status_message.message_id
+            "⚠️ An error occurred. Try a different song.",
+            chat_id, status.message_id
         )
-        # Clean up any created files
-        for ext in ['.mp3', '_thumb.jpg']:
-            if os.path.exists(f"{file_path}{ext}"):
-                os.remove(f"{file_path}{ext}")
 
+# Main
 def main():
-    global bot_start_time
-    bot_start_time = time.time()
-    
-    # Start keep-alive thread
-    keep_alive_thread = Thread(target=keep_alive)
-    keep_alive_thread.daemon = True
-    keep_alive_thread.start()
-    
-    logger.info("Bot started!")
+    Thread(target=keep_alive, daemon=True).start()
+    logger.info("Bot started polling...")
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
 
 if __name__ == "__main__":
