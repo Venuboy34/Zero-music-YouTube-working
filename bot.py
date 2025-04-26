@@ -156,8 +156,16 @@ def music_search(message):
         # Send "upload_audio" action
         bot.send_chat_action(message.chat.id, 'upload_audio')
         
-        with YoutubeDL(ydl_
-            
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{search_query}", download=True)
+            entry = info['entries'][0]
+            title = entry.get('title')
+            artist = entry.get('uploader')
+            duration = entry.get('duration', 0)
+            webpage_url = entry.get('webpage_url')
+            view_count = entry.get('view_count', 0)
+            thumbnail_url = entry.get('thumbnail')
+
             # Use sanitized filename
             title_safe = sanitize_filename(title)
             filename = f"{file_path}.mp3"
