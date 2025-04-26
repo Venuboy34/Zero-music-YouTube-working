@@ -1,0 +1,20 @@
+name: telegram-music-bot
+services:
+  - name: telegram-music-bot
+    git:
+      repository: your-github-username/your-repo-name
+      branch: main
+    build:
+      builder: dockerfile
+    env:
+      - key: BOT_TOKEN
+        value: "7607542715:AAEFjEb3RQ38ztOE4DkqMxGQQL5uCN4WZPw"
+    resources:
+      cpu_limit: "0.25"
+      memory_limit: "512Mi"
+    scale:
+      min: 1
+      max: 1
+    routes:
+      - path: /
+        port: 8080
