@@ -2,6 +2,8 @@ import os
 import time
 import logging
 import requests
+import threading
+from flask import Flask
 from threading import Thread
 
 import telebot
@@ -22,19 +24,28 @@ bot = telebot.TeleBot(BOT_TOKEN)
 download_count = 0
 bot_start_time = time.time()
 
+# Flask App for Health Check
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "✅ Bot is alive!", 200
+
+def run():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+def keep_alive():
+    """Start a small web server to prevent sleeping"""
+    t = threading.Thread(target=run)
+    t.start()
+
 # Utils
 def sanitize_filename(filename):
-    """Remove illegal characters from filenames"""
+    """Remove illegal characters from filenames."""
     illegal_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
     for char in illegal_chars:
         filename = filename.replace(char, '_')
     return filename
-
-def keep_alive():
-    """Prevent bot sleeping (for free hosting platforms)"""
-    while True:
-        logger.info("Keep-alive ping")
-        time.sleep(600)  # every 10 minutes
 
 # Handlers
 @bot.message_handler(commands=['start'])
@@ -116,12 +127,13 @@ def handle_music_request(message):
     bot.send_chat_action(chat_id, 'typing')
     status = bot.reply_to(message, f"🔎 Searching for: *{query}*", parse_mode="Markdown")
 
+    mp3_file = None
+    thumb_file = None
+
     try:
-        # Create download directory
         os.makedirs("downloads", exist_ok=True)
         file_base = f"downloads/{int(time.time())}"
 
-        # Precheck YouTube Search
         with YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
             result = ydl.extract_info(f"ytsearch1:{query}", download=False)
         if not result or not result.get('entries'):
@@ -134,7 +146,6 @@ def handle_music_request(message):
         bot.edit_message_text("🎶 Found! Downloading audio...", chat_id, status.message_id, parse_mode="Markdown")
         bot.send_chat_action(chat_id, 'upload_audio')
 
-        # Download Options
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': f"{file_base}.%(ext)s",
@@ -157,73 +168,58 @@ def handle_music_request(message):
         thumb_url = info.get('thumbnail')
 
         mp3_file = f"{file_base}.mp3"
-        if os.path.getsize(mp3_file) > 50 * 1024 * 1024:  # >50MB
+
+        if os.path.getsize(mp3_file) > 50 * 1024 * 1024:
             bot.edit_message_text(
                 "⚠️ Audio file too large (>50MB). Try a shorter song.",
                 chat_id, status.message_id
             )
-            os.remove(mp3_file)
             return
 
-        # Download thumbnail
-        thumb_file = None
         if thumb_url:
             thumb_file = f"{file_base}_thumb.jpg"
-            with open(thumb_file, 'wb') as f:
-                f.write(requests.get(thumb_url).content)
+            thumb_resp = requests.get(thumb_url)
+            if thumb_resp.ok:
+                with open(thumb_file, 'wb') as f:
+                    f.write(thumb_resp.content)
 
-        # Format Duration
         min, sec = divmod(duration, 60)
         duration_str = f"{int(min)}:{sec:02d}"
 
-        # Upload
-        with open(mp3_file, 'rb') as audio:
-            thumb_param = {}
+        caption_text = (
+            f"🎵 *{title}*\n"
+            f"👤 _{artist}_\n"
+            f"⏱ {duration_str}\n"
+            f"👁 {views:,} views\n\n"
+            f"[YouTube Link]({url})\n\n"
+            f"Enjoy, {user_name}! 🎧\n\n"
+            f"Powered by @zerocreations"
+        )
+
+        with open(mp3_file, 'rb') as audio_file:
             if thumb_file and os.path.exists(thumb_file):
-                with open(thumb_file, 'rb') as thumb:
-                    thumb_param['thumb'] = thumb
+                with open(thumb_file, 'rb') as thumb_img:
                     bot.send_audio(
                         chat_id,
-                        audio,
+                        audio_file,
                         title=title,
                         performer=artist,
-                        caption=(
-                            f"🎵 *{title}*\n"
-                            f"👤 _{artist}_\n"
-                            f"⏱ {duration_str}\n"
-                            f"👁 {views:,} views\n\n"
-                            f"[YouTube Link]({url})\n\n"
-                            f"Enjoy, {user_name}! 🎧\n\n"
-                            f"Powered by @zerocreations"
-                        ),
+                        caption=caption_text,
                         parse_mode="Markdown",
-                        **thumb_param
+                        thumb=thumb_img
                     )
             else:
                 bot.send_audio(
                     chat_id,
-                    audio,
+                    audio_file,
                     title=title,
                     performer=artist,
-                    caption=(
-                        f"🎵 *{title}*\n"
-                        f"👤 _{artist}_\n"
-                        f"⏱ {duration_str}\n"
-                        f"👁 {views:,} views\n\n"
-                        f"[YouTube Link]({url})\n\n"
-                        f"Enjoy, {user_name}! 🎧\n\n"
-                        f"Powered by @zerocreations"
-                    ),
+                    caption=caption_text,
                     parse_mode="Markdown"
                 )
 
         bot.delete_message(chat_id, status.message_id)
         download_count += 1
-
-        # Cleanup
-        os.remove(mp3_file)
-        if thumb_file and os.path.exists(thumb_file):
-            os.remove(thumb_file)
 
     except Exception as e:
         logger.error(f"Music Search Error: {e}")
@@ -232,10 +228,15 @@ def handle_music_request(message):
             chat_id, status.message_id,
             parse_mode="Markdown"
         )
+    finally:
+        if mp3_file and os.path.exists(mp3_file):
+            os.remove(mp3_file)
+        if thumb_file and os.path.exists(thumb_file):
+            os.remove(thumb_file)
 
 # Main
 def main():
-    Thread(target=keep_alive, daemon=True).start()
+    keep_alive()
     logger.info("Bot started polling...")
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
 
